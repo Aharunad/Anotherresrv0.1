@@ -1,66 +1,90 @@
-name: Build ATLAS Planet Finder APK
+name: Build ATLAS Android APK
 
-on:
+'on':
   workflow_dispatch:
   push:
-    branches: [main, master]
     paths:
-      - 'app/**'
-      - '*.gradle'
-      - 'gradle.properties'
-      - 'settings.gradle'
-      - '.github/workflows/**'
+      - '*.zip'
+      - '.github/workflows/build-atlas-apk.yml'
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: Build Android debug APK
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Python for Chaquopy
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK packages
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
-
-      - name: Set up Gradle 8.9
+      - name: Install Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Compile APK
-        run: gradle --no-daemon --stacktrace assembleDebug
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
 
-      - name: Verify APK artifact
+      - name: Extract Android project
         shell: bash
         run: |
           set -euo pipefail
-          APK="app/build/outputs/apk/debug/app-debug.apk"
-          test -s "$APK"
-          file "$APK"
-          sha256sum "$APK"
+
+          ZIP_FILE=""
+
+          for FILE in ./*.zip; do
+            if [ -f "$FILE" ]; then
+              ZIP_FILE="$FILE"
+              break
+            fi
+          done
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: No ZIP file found in repository root."
+            ls -la
+            exit 1
+          fi
+
+          echo "Using source archive: $ZIP_FILE"
+
+          mkdir -p extracted
+          unzip -oq "$ZIP_FILE" -d extracted
+
+          PROJECT_DIR="$(find extracted -type f \( \
+            -name settings.gradle \
+            -o -name settings.gradle.kts \
+          \) -printf '%h\n' -quit)"
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: No Gradle settings file found in the ZIP."
+            echo "The ZIP may not contain a complete Android Gradle project."
+            find extracted -maxdepth 4 -type f | head -80
+            exit 1
+          fi
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Android project found at: $PROJECT_DIR"
+
+      - name: Build debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          gradle assembleDebug --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ATLAS-Planet-Finder-v1.0-debug-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: ATLAS-Futurica-debug-APK
+          path: extracted/**/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
